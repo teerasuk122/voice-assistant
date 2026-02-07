@@ -3,6 +3,7 @@ gui.py — Floating HUD search-bar interface (PyQt6)
 
 Frameless, transparent, always-on-top, centred overlay.
 Dark-mode aesthetic with pulsing animation while listening.
+Always-on continuous listening — HUD shows/hides but listening never stops.
 """
 
 from PyQt6.QtCore import (
@@ -10,7 +11,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import QColor, QPainter, QFont
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QGraphicsDropShadowEffect,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QGraphicsDropShadowEffect,
     QApplication, QSizePolicy,
 )
 
@@ -23,11 +24,12 @@ from config import CFG
 log = logging.getLogger(__name__)
 
 # ── Colour palette ──────────────────────────────────────────────
-BG_COLOR      = QColor(30, 30, 30, 230)       # near-black translucent
-ACCENT_COLOR  = QColor(80, 160, 255)           # blue accent
+BG_COLOR      = QColor(30, 30, 30, 230)
+ACCENT_COLOR  = QColor(80, 160, 255)
 TEXT_COLOR     = QColor(230, 230, 230)
 ERROR_COLOR   = QColor(255, 90, 90)
 SUBTLE_COLOR  = QColor(140, 140, 140)
+GREEN_COLOR   = QColor(80, 200, 120)
 
 BAR_WIDTH  = CFG["bar_width"]
 BAR_HEIGHT = 64
@@ -83,11 +85,17 @@ class PulseIndicator(QWidget):
 
 
 class AssistantHUD(QWidget):
-    """The main floating overlay window."""
+    """The main floating overlay window.
+
+    Always-on mode: once activated, the assistant keeps listening
+    in a loop. The HUD auto-hides after a response but listening
+    continues in the background. Toggle with tray icon / hotkey.
+    """
 
     def __init__(self):
         super().__init__()
         self._conversation: list[dict] = []
+        self._active = False          # True = listening loop is running
         self._setup_window()
         self._build_ui()
         self._workers_init()
@@ -97,7 +105,7 @@ class AssistantHUD(QWidget):
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool              # hide from dock / taskbar
+            | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedWidth(BAR_WIDTH)
@@ -106,7 +114,7 @@ class AssistantHUD(QWidget):
     def _center_on_screen(self):
         screen = QApplication.primaryScreen().geometry()
         x = (screen.width() - self.width()) // 2
-        y = int(screen.height() * 0.28)       # slightly above centre
+        y = int(screen.height() * 0.28)
         self.move(x, y)
 
     # ── UI construction ─────────────────────────────────────────
@@ -124,7 +132,6 @@ class AssistantHUD(QWidget):
         self.status_label.setStyleSheet(f"color: {SUBTLE_COLOR.name()};")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
-        from PyQt6.QtWidgets import QHBoxLayout
         top_row = QHBoxLayout()
         top_row.setSpacing(10)
         top_row.addWidget(self.pulse)
@@ -136,8 +143,12 @@ class AssistantHUD(QWidget):
         self.response_label.setFont(QFont(".AppleSystemUIFont", 14))
         self.response_label.setStyleSheet(f"color: {TEXT_COLOR.name()};")
         self.response_label.setWordWrap(True)
-        self.response_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        self.response_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.response_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        self.response_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self.response_label.hide()
         layout.addWidget(self.response_label)
 
@@ -165,24 +176,40 @@ class AssistantHUD(QWidget):
 
     # ── Public API ──────────────────────────────────────────────
     def activate(self):
-        """Show the HUD and start listening."""
+        """Start the always-on listening loop and show HUD."""
+        self._active = True
+        self._show_hud()
+        self._start_listening()
+
+    def deactivate(self):
+        """Stop the listening loop and hide HUD.
+        TTS keeps playing if active — only STT/LLM are stopped."""
+        self._active = False
+        self.pulse.stop()
+        # Stop STT and LLM but let TTS finish playing
+        for w in (self._stt_worker, self._llm_worker):
+            if w is not None and w.isRunning():
+                w.quit()
+                w.wait(2000)
+        self.hide()
+
+    def toggle(self):
+        if self._active:
+            self.deactivate()
+        else:
+            self.activate()
+
+    # ── HUD visibility helpers ──────────────────────────────────
+    def _show_hud(self):
         self._set_collapsed()
         self.show()
         self.raise_()
         self.activateWindow()
         self._center_on_screen()
-        self._start_listening()
 
-    def deactivate(self):
-        """Hide the HUD and stop any workers."""
-        self._stop_all_workers()
+    def _hide_hud(self):
+        """Hide the window but keep _active = True (listening continues)."""
         self.hide()
-
-    def toggle(self):
-        if self.isVisible():
-            self.deactivate()
-        else:
-            self.activate()
 
     # ── Internal state helpers ──────────────────────────────────
     def _set_collapsed(self):
@@ -205,7 +232,12 @@ class AssistantHUD(QWidget):
 
     # ── Listening pipeline ──────────────────────────────────────
     def _start_listening(self):
-        self._set_status("กำลังฟัง…", ACCENT_COLOR)
+        if not self._active:
+            return
+        # Show HUD in listening state
+        if not self.isVisible():
+            self._show_hud()
+        self._set_status("กำลังฟัง… พูดได้เลย", ACCENT_COLOR)
         self.pulse.start()
 
         self._stt_worker = STTWorker()
@@ -228,15 +260,17 @@ class AssistantHUD(QWidget):
     def _on_stt_error(self, msg: str):
         self.pulse.stop()
         self._set_status(msg, ERROR_COLOR)
-        # Auto-retry listening after showing error briefly
-        QTimer.singleShot(2000, self._resume_listening)
+        # Auto-retry listening
+        QTimer.singleShot(1500, self._resume_listening)
 
     # ── LLM pipeline ───────────────────────────────────────────
     def _send_to_llm(self, user_text: str):
         self._set_status("กำลังคิด…", ACCENT_COLOR)
 
         self._llm_worker = LLMWorker(user_text, self._conversation)
-        self._llm_worker.finished.connect(lambda reply: self._on_llm_reply(user_text, reply))
+        self._llm_worker.finished.connect(
+            lambda reply: self._on_llm_reply(user_text, reply)
+        )
         self._llm_worker.error.connect(self._on_llm_error)
         self._llm_worker.start()
 
@@ -255,7 +289,7 @@ class AssistantHUD(QWidget):
     @pyqtSlot(str)
     def _on_llm_error(self, msg: str):
         self._set_status(msg, ERROR_COLOR)
-        QTimer.singleShot(3000, self._resume_listening)
+        QTimer.singleShot(2000, self._resume_listening)
 
     # ── TTS pipeline ────────────────────────────────────────────
     def _speak(self, text: str):
@@ -266,22 +300,21 @@ class AssistantHUD(QWidget):
 
     @pyqtSlot()
     def _on_tts_done(self):
-        # After speaking, automatically start listening again
-        QTimer.singleShot(500, self._resume_listening)
+        # Hide HUD after speaking, then resume listening
+        self._hide_hud()
+        QTimer.singleShot(300, self._resume_listening)
 
     @pyqtSlot(str)
     def _on_tts_error(self, msg: str):
-        # Non-fatal: response is still visible, resume listening
         log.warning("TTS: %s", msg)
-        QTimer.singleShot(500, self._resume_listening)
+        self._hide_hud()
+        QTimer.singleShot(300, self._resume_listening)
 
     # ── Resume listening (continuous mode) ─────────────────────
     def _resume_listening(self):
-        """Collapse the response and start listening again."""
-        if not self.isVisible():
+        """Start listening again if still active."""
+        if not self._active:
             return
-        self._set_collapsed()
-        self._center_on_screen()
         self._start_listening()
 
     # ── Cleanup ─────────────────────────────────────────────────
@@ -292,7 +325,7 @@ class AssistantHUD(QWidget):
                 w.wait(2000)
 
     def keyPressEvent(self, event):
-        """Escape dismisses the overlay."""
+        """Escape dismisses the overlay and stops listening."""
         if event.key() == Qt.Key.Key_Escape:
             self.deactivate()
         super().keyPressEvent(event)

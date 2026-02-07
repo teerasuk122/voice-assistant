@@ -13,6 +13,11 @@ from config import CFG
 
 log = logging.getLogger(__name__)
 
+SYSTEM_PROMPT = (
+    "คุณคือผู้ช่วย AI ที่ตอบภาษาไทย สั้น กระชับ ตรงประเด็น "
+    "ไม่เกิน 2-3 ประโยค ยกเว้นผู้ใช้ขอคำอธิบายละเอียด"
+)
+
 
 class LLMWorker(QThread):
     """Background thread for LLM API calls."""
@@ -26,7 +31,8 @@ class LLMWorker(QThread):
         self.conversation = conversation or []
 
     def run(self):
-        messages = list(self.conversation)
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages.extend(self.conversation)
         messages.append({"role": "user", "content": self.user_text})
 
         payload = {

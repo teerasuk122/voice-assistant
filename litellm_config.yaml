@@ -1,5 +1,5 @@
 model_list:
   - model_name: openclaw
     litellm_params:
-      model: ollama/llama3.1:8b
+      model: ollama/kimi-k2.5:cloud
       api_base: http://localhost:11434
