@@ -19,5 +19,8 @@ build/
 # PyInstaller
 *.spec
 
+# Logs
+logs/
+
 # Config (may contain API keys)
 config.yaml
