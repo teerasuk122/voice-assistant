@@ -228,7 +228,8 @@ class AssistantHUD(QWidget):
     def _on_stt_error(self, msg: str):
         self.pulse.stop()
         self._set_status(msg, ERROR_COLOR)
-        QTimer.singleShot(3000, self.deactivate)
+        # Auto-retry listening after showing error briefly
+        QTimer.singleShot(2000, self._resume_listening)
 
     # ── LLM pipeline ───────────────────────────────────────────
     def _send_to_llm(self, user_text: str):
@@ -254,7 +255,7 @@ class AssistantHUD(QWidget):
     @pyqtSlot(str)
     def _on_llm_error(self, msg: str):
         self._set_status(msg, ERROR_COLOR)
-        QTimer.singleShot(4000, self.deactivate)
+        QTimer.singleShot(3000, self._resume_listening)
 
     # ── TTS pipeline ────────────────────────────────────────────
     def _speak(self, text: str):
@@ -265,14 +266,23 @@ class AssistantHUD(QWidget):
 
     @pyqtSlot()
     def _on_tts_done(self):
-        # Auto-hide after speaking (give user time to read)
-        QTimer.singleShot(CFG["auto_hide_delay"], self.deactivate)
+        # After speaking, automatically start listening again
+        QTimer.singleShot(500, self._resume_listening)
 
     @pyqtSlot(str)
     def _on_tts_error(self, msg: str):
-        # Non-fatal: response is still visible on screen
+        # Non-fatal: response is still visible, resume listening
         log.warning("TTS: %s", msg)
-        QTimer.singleShot(CFG["auto_hide_delay"], self.deactivate)
+        QTimer.singleShot(500, self._resume_listening)
+
+    # ── Resume listening (continuous mode) ─────────────────────
+    def _resume_listening(self):
+        """Collapse the response and start listening again."""
+        if not self.isVisible():
+            return
+        self._set_collapsed()
+        self._center_on_screen()
+        self._start_listening()
 
     # ── Cleanup ─────────────────────────────────────────────────
     def _stop_all_workers(self):
