@@ -6,6 +6,7 @@ TTS: Microsoft Edge TTS (th-TH-PremwadeeNeural) → play via macOS afplay.
 """
 
 import asyncio
+import logging
 import os
 import subprocess
 import tempfile
@@ -14,14 +15,9 @@ import edge_tts
 import speech_recognition as sr
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from config import CFG
 
-TTS_VOICE = "th-TH-PremwadeeNeural"
-STT_LANGUAGE = "th-TH"
-
-# Silence-based energy / pause thresholds
-ENERGY_THRESHOLD = 300
-PAUSE_THRESHOLD = 1.5        # seconds of silence to consider phrase complete
-PHRASE_TIME_LIMIT = 30        # max seconds for a single utterance
+log = logging.getLogger(__name__)
 
 
 class STTWorker(QThread):
@@ -33,29 +29,37 @@ class STTWorker(QThread):
 
     def run(self):
         recogniser = sr.Recognizer()
-        recogniser.energy_threshold = ENERGY_THRESHOLD
+        recogniser.energy_threshold = CFG["stt_energy_threshold"]
         recogniser.dynamic_energy_threshold = True
-        recogniser.pause_threshold = PAUSE_THRESHOLD
+        recogniser.pause_threshold = CFG["stt_pause_threshold"]
 
         try:
             with sr.Microphone() as source:
                 recogniser.adjust_for_ambient_noise(source, duration=0.5)
                 self.listening_started.emit()
+                log.info("Listening started")
                 audio = recogniser.listen(
                     source,
-                    phrase_time_limit=PHRASE_TIME_LIMIT,
+                    phrase_time_limit=CFG["stt_phrase_time_limit"],
                 )
         except OSError as exc:
-            self.error.emit(f"ไม่พบไมโครโฟน: {exc}")
+            msg = f"ไม่พบไมโครโฟน: {exc}"
+            log.error(msg)
+            self.error.emit(msg)
             return
 
         try:
-            text = recogniser.recognize_google(audio, language=STT_LANGUAGE)
+            text = recogniser.recognize_google(audio, language=CFG["stt_language"])
+            log.info("STT result: %s", text)
             self.result.emit(text)
         except sr.UnknownValueError:
-            self.error.emit("ไม่สามารถเข้าใจเสียงได้ — ลองพูดใหม่อีกครั้ง")
+            msg = "ไม่สามารถเข้าใจเสียงได้ — ลองพูดใหม่อีกครั้ง"
+            log.warning(msg)
+            self.error.emit(msg)
         except sr.RequestError as exc:
-            self.error.emit(f"Google STT Error: {exc}")
+            msg = f"Google STT Error: {exc}"
+            log.error(msg)
+            self.error.emit(msg)
 
 
 class TTSWorker(QThread):
@@ -73,6 +77,7 @@ class TTSWorker(QThread):
             asyncio.run(self._synthesize_and_play())
             self.finished.emit()
         except Exception as exc:
+            log.exception("TTS error")
             self.error.emit(f"TTS Error: {exc}")
 
     async def _synthesize_and_play(self):
@@ -81,11 +86,11 @@ class TTSWorker(QThread):
         tmp.close()
 
         try:
-            communicate = edge_tts.Communicate(self.text, TTS_VOICE)
+            communicate = edge_tts.Communicate(self.text, CFG["tts_voice"])
             await communicate.save(tmp_path)
+            log.info("TTS audio saved, playing via afplay")
 
-            # afplay is built-in on macOS — lightweight, no extra deps
-            proc = subprocess.run(
+            subprocess.run(
                 ["afplay", tmp_path],
                 check=True,
                 capture_output=True,

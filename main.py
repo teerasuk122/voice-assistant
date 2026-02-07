@@ -8,13 +8,17 @@ launches the PyQt6 HUD, and bridges the two event loops.
 
 import sys
 import signal
+import logging
 
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction
 from PyQt6.QtCore import QTimer
 from pynput import keyboard
 
+from config import setup_logging, create_default_config, CFG
 from gui import AssistantHUD
+
+log = logging.getLogger(__name__)
 
 
 def make_tray_icon() -> QIcon:
@@ -32,6 +36,11 @@ def make_tray_icon() -> QIcon:
 
 
 def main():
+    setup_logging()
+    create_default_config()
+
+    log.info("Starting Voice Assistant")
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # keep running in tray
 
@@ -60,7 +69,7 @@ def main():
     def on_press(key):
         pressed_keys.add(key)
         if hotkey_combo.issubset(pressed_keys):
-            # Schedule on the Qt main thread via a single-shot timer
+            log.info("Hotkey triggered")
             QTimer.singleShot(0, hud.toggle)
 
     def on_release(key):
@@ -73,6 +82,7 @@ def main():
     # Allow Ctrl+C to quit from terminal
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+    log.info("Voice Assistant running — Alt+Space to activate")
     print("Voice Assistant running — Alt+Space to activate, tray icon to quit.")
     sys.exit(app.exec())
 

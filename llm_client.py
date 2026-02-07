@@ -5,13 +5,13 @@ Handles all communication with the OpenClaw inference endpoint.
 Runs requests in a QThread to avoid blocking the GUI.
 """
 
+import logging
 import requests
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from config import CFG
 
-OPENCLAW_URL = "http://localhost:4000/v1/chat/completions"
-MODEL_NAME = "openclaw"
-TIMEOUT_SECONDS = 60
+log = logging.getLogger(__name__)
 
 
 class LLMWorker(QThread):
@@ -30,25 +30,33 @@ class LLMWorker(QThread):
         messages.append({"role": "user", "content": self.user_text})
 
         payload = {
-            "model": MODEL_NAME,
+            "model": CFG["llm_model"],
             "messages": messages,
-            "temperature": 0.7,
-            "max_tokens": 1024,
+            "temperature": CFG["llm_temperature"],
+            "max_tokens": CFG["llm_max_tokens"],
         }
+
+        log.info("Sending to LLM: %s", self.user_text[:80])
 
         try:
             resp = requests.post(
-                OPENCLAW_URL,
+                CFG["llm_url"],
                 json=payload,
-                timeout=TIMEOUT_SECONDS,
+                timeout=CFG["llm_timeout"],
             )
             resp.raise_for_status()
             data = resp.json()
             reply = data["choices"][0]["message"]["content"]
+            log.info("LLM reply received (%d chars)", len(reply))
             self.finished.emit(reply.strip())
         except requests.ConnectionError:
-            self.error.emit("ไม่สามารถเชื่อมต่อ OpenClaw ได้ — ตรวจสอบว่าเซิร์ฟเวอร์ทำงานอยู่")
+            msg = "ไม่สามารถเชื่อมต่อ OpenClaw ได้ — ตรวจสอบว่าเซิร์ฟเวอร์ทำงานอยู่"
+            log.error(msg)
+            self.error.emit(msg)
         except requests.Timeout:
-            self.error.emit("OpenClaw ไม่ตอบสนองภายในเวลาที่กำหนด")
+            msg = "OpenClaw ไม่ตอบสนองภายในเวลาที่กำหนด"
+            log.error(msg)
+            self.error.emit(msg)
         except Exception as exc:
+            log.exception("LLM error")
             self.error.emit(f"LLM Error: {exc}")

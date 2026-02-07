@@ -14,9 +14,13 @@ from PyQt6.QtWidgets import (
     QApplication, QSizePolicy,
 )
 
+import logging
+
 from audio_handler import STTWorker, TTSWorker
 from llm_client import LLMWorker
+from config import CFG
 
+log = logging.getLogger(__name__)
 
 # ── Colour palette ──────────────────────────────────────────────
 BG_COLOR      = QColor(30, 30, 30, 230)       # near-black translucent
@@ -25,7 +29,7 @@ TEXT_COLOR     = QColor(230, 230, 230)
 ERROR_COLOR   = QColor(255, 90, 90)
 SUBTLE_COLOR  = QColor(140, 140, 140)
 
-BAR_WIDTH  = 680
+BAR_WIDTH  = CFG["bar_width"]
 BAR_HEIGHT = 64
 EXPANDED_MIN_HEIGHT = 180
 CORNER_RADIUS = 20
@@ -262,13 +266,13 @@ class AssistantHUD(QWidget):
     @pyqtSlot()
     def _on_tts_done(self):
         # Auto-hide after speaking (give user time to read)
-        QTimer.singleShot(5000, self.deactivate)
+        QTimer.singleShot(CFG["auto_hide_delay"], self.deactivate)
 
     @pyqtSlot(str)
     def _on_tts_error(self, msg: str):
         # Non-fatal: response is still visible on screen
-        print(f"[TTS] {msg}")
-        QTimer.singleShot(5000, self.deactivate)
+        log.warning("TTS: %s", msg)
+        QTimer.singleShot(CFG["auto_hide_delay"], self.deactivate)
 
     # ── Cleanup ─────────────────────────────────────────────────
     def _stop_all_workers(self):
